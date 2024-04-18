@@ -2,6 +2,7 @@
 
 pragma solidity 0.8.25;
 
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -22,7 +23,12 @@ contract DSCEngine is IDSCEngine, ReentrancyGuard {
     error DSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength();
     error DSCEngine__TokenNotAllowed();
 
+    uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+    uint256 private constant PRECISION = 1e18;
+
+    address[] private s_collateralTokens;
     mapping(address token => address priceFeed) private s_priceFeeds;
+    mapping(address user => uint256 amountDSCMinted) private s_DSCMinted;
     mapping(address user => mapping(address token => uint256)) private s_userCollateralBalances;
 
     DSC private immutable i_dsc;
@@ -49,6 +55,7 @@ contract DSCEngine is IDSCEngine, ReentrancyGuard {
         }
         for (uint256 i = 0; i < tokenAddresses.length; i++) {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
+            s_collateralTokens.push(tokenAddresses[i]);
         }
         i_dsc = DSC(dscAddress);
     }
@@ -78,7 +85,10 @@ contract DSCEngine is IDSCEngine, ReentrancyGuard {
     function redeemCollateral() external {}
 
     // @inheritdoc IDSCEngine
-    function mintDSC() external {}
+    function mintDSC(uint256 amountDSC) external moreThanZero(amountDSC) nonReentrant {
+        s_DSCMinted[msg.sender] += amountDSC;
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     // @inheritdoc IDSCEngine
     function burnDSC() external {}
@@ -88,4 +98,45 @@ contract DSCEngine is IDSCEngine, ReentrancyGuard {
 
     // @inheritdoc IDSCEngine
     function getHealthFactor() external view {}
+
+    /**
+     * Returns how close to being liquidated the user is
+     * If a user goes below 1, then can be liquidated
+     * @param user The address of the user to check the health factor for
+     */
+    function _healthFactor(address user) internal view returns (uint256) {
+        (uint256 totalDSCMinted, uint256 totalCollateralValueInUSD) = _totalDSCMintedAndCollateralValueInUSD(user);
+    }
+
+    function _revertIfHealthFactorIsBroken(address user) internal view {}
+
+    /**
+     *
+     * @param user The address of the user to check the health factor for
+     * @return totalDSCMinted The total amount of DSC minted by the user
+     * @return collaTeralValueInUSD The total value of the user's collateral in USD
+     */
+    function _totalDSCMintedAndCollateralValueInUSD(address user)
+        private
+        view
+        returns (uint256 totalDSCMinted, uint256 collaTeralValueInUSD)
+    {
+        totalDSCMinted = s_DSCMinted[user];
+        collaTeralValueInUSD = getAccountCollateralValueInUSD(user);
+    }
+
+    // @inheritdoc IDSCEngine
+    function getAccountCollateralValueInUSD(address user) public view returns (uint256 totalCollateralValueInUSD) {
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            address token = s_collateralTokens[i];
+            uint256 amount = s_userCollateralBalances[user][token];
+            totalCollateralValueInUSD += getUSDValue(token, amount);
+        }
+    }
+
+    function getUSDValue(address token, uint256 amount) public view returns (uint256 price) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
+    }
 }

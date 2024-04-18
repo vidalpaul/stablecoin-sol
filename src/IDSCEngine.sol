@@ -16,11 +16,18 @@ interface IDSCEngine {
 
     function redeemCollateral() external;
 
-    function mintDSC() external;
+    /**
+     * @dev Check if the user has enough collateral to mint DSC
+     * @param amountDSC The amount of DSC to mint
+     * @notice User must have more collateral value than the minimum threshold
+     */
+    function mintDSC(uint256 amountDSC) external;
 
     function burnDSC() external;
 
     function liquidate() external;
 
     function getHealthFactor() external view;
+
+    function getAccountCollateralValueInUSD(address user) external view returns (uint256);
 }
